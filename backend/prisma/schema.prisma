@@ -1,0 +1,238 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-Tenant ───────────────────────────────────────
+model Clinic {
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  email         String   @unique
+  phone         String?
+  address       String?
+  city          String?
+  logo          String?
+  timezone      String   @default("Asia/Karachi")
+  workingHours  Json?    // { monday: {start:"09:00",end:"17:00"}, ... }
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users         User[]
+  doctors       Doctor[]
+  services      Service[]
+  patients      Patient[]
+  appointments  Appointment[]
+  slots         Slot[]
+  notifications Notification[]
+
+  @@index([slug])
+}
+
+// ─── Users (Admin, Staff) ──────────────────────────────
+model User {
+  id           String   @id @default(uuid())
+  clinicId     String
+  clinic       Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String
+  name         String
+  role         String   @default("ADMIN") // ADMIN, STAFF
+  phone        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  createdAppointments Appointment[] @relation("CreatedBy")
+
+  @@unique([clinicId, email])
+  @@index([clinicId])
+}
+
+// ─── Doctors ───────────────────────────────────────────
+model Doctor {
+  id           String   @id @default(uuid())
+  clinicId     String
+  clinic       Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  name         String
+  email        String?
+  phone        String?
+  specialty    String?
+  qualifications String?
+  bio          String?
+  imageUrl     String?
+  consultationFee Float @default(0)
+  slotDurationMinutes Int @default(30)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  services     DoctorService[]
+  availability Availability[]
+  appointments Appointment[]
+  slots        Slot[]
+
+  @@index([clinicId])
+}
+
+// ─── Services ──────────────────────────────────────────
+model Service {
+  id          String   @id @default(uuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  duration    Int      @default(30) // minutes
+  price       Float    @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  doctors     DoctorService[]
+
+  @@index([clinicId])
+}
+
+// ─── Doctor-Service linking ────────────────────────────
+model DoctorService {
+  id        String  @id @default(uuid())
+  doctorId  String
+  doctor    Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, serviceId])
+}
+
+// ─── Doctor Availability (recurring weekly slots) ─────
+model Availability {
+  id        String  @id @default(uuid())
+  doctorId  String
+  doctor    Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek Int     // 0=Sunday, 6=Saturday
+  startTime String  // "09:00"
+  endTime   String  // "17:00"
+  isAvailable Boolean @default(true)
+
+  @@unique([doctorId, dayOfWeek])
+}
+
+// ─── Patients ──────────────────────────────────────────
+model Patient {
+  id            String   @id @default(uuid())
+  clinicId      String
+  clinic        Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  name          String
+  email         String?
+  phone         String
+  dateOfBirth   DateTime?
+  gender        String?
+  address       String?
+  cnic          String?
+  bloodGroup    String?
+  allergies     String?
+  medicalHistory String?
+  insuranceProvider String?
+  insuranceNumber   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  appointments  Appointment[]
+  prescriptions Prescription[]
+
+  @@unique([clinicId, phone])
+  @@index([clinicId])
+}
+
+// ─── Appointments ──────────────────────────────────────
+model Appointment {
+  id             String   @id @default(uuid())
+  clinicId       String
+  clinic         Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patientId      String
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  serviceId      String?
+  date           DateTime
+  startTime      String   // "10:00"
+  endTime        String   // "10:30"
+  status         String   @default("CONFIRMED") // PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW
+  type           String   @default("CONSULTATION") // CONSULTATION, FOLLOW_UP, PROCEDURE, EMERGENCY
+  notes          String?
+  symptoms       String?
+  diagnosis      String?
+  createdById    String?
+  createdBy      User?    @relation("CreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  payments       Payment[]
+  prescriptions Prescription[]
+
+  @@unique([doctorId, date, startTime])
+  @@index([clinicId, date])
+  @@index([doctorId, date])
+  @@index([patientId])
+  @@index([status])
+}
+
+// ─── Time Slots (generated for calendar) ───────────────
+model Slot {
+  id        String  @id @default(uuid())
+  clinicId  String
+  clinic    Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  doctorId  String
+  doctor    Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      DateTime
+  startTime String
+  endTime   String
+  isBooked  Boolean @default(false)
+  appointmentId String?
+
+  @@unique([doctorId, date, startTime])
+  @@index([doctorId, date])
+}
+
+// ─── Payments ──────────────────────────────────────────
+model Payment {
+  id              String   @id @default(uuid())
+  appointmentId   String
+  appointment     Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  amount          Float
+  method          String   @default("CASH") // CASH, CARD, ONLINE
+  status          String   @default("PAID") // PAID, REFUNDED, PENDING
+  transactionId   String?
+  createdAt       DateTime @default(now())
+}
+
+// ─── Prescriptions ─────────────────────────────────────
+model Prescription {
+  id              String   @id @default(uuid())
+  patientId       String
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentId   String?
+  appointment     Appointment? @relation(fields: [appointmentId], references: [id])
+  doctorName      String
+  diagnosis       String
+  medications     Json     // [{name, dosage, frequency, duration, notes}]
+  notes           String?
+  createdAt       DateTime @default(now())
+}
+
+// ─── Notifications ─────────────────────────────────────
+model Notification {
+  id        String   @id @default(uuid())
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  type      String   // APPOINTMENT_REMINDER, APPOINTMENT_CONFIRMED, etc.
+  recipient String
+  subject   String
+  body      String
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+}
